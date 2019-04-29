@@ -74,11 +74,68 @@ def run_EEG_record(model, file='EEG_data/DA0570A6_1-1+.edf'):
         # pos = mds.fit_transform(distance)
         # attention_graph(pos, title='MDS, Attention Head {}'.format(i))
         # t-sne
-        tsne = manifold.TSNE(n_components=2, perplexity=5,  # random_state=seed,
+        tsne = manifold.TSNE(n_components=2, perplexity=8,  # random_state=seed,
                            metric="precomputed")
         pos = tsne.fit_transform(distance)
         attention_graph(pos, title='t-sne, Attention Head {}'.format(i))
     return
+
+'''
+Under development
+def attents_box(model):
+    """test on a record trial"""
+    features = Variable(torch.FloatTensor(x_test))
+    adj = Variable(torch.FloatTensor(np.ones([features.shape[0], features.shape[1], features.shape[1]])))
+    labels = Variable(torch.LongTensor(y_test))
+
+    model.eval()
+    output = model(features, adj)
+    if SpikeChans == True:
+        display_spike_chans(output, labels)
+    output = output.view(-1, 2)
+    labels = labels.view(-1)
+    loss_test = F.nll_loss(output, labels)
+    acc_test = accuracy(output, labels)
+
+
+
+    raw = mne.io.read_raw_edf(file, preload=True)
+    raw = raw_eeg_pick(raw)  # now only EEG channels
+
+    x = get_data(raw)  # (batch, chans, features)
+
+    # run model
+    features = Variable(torch.FloatTensor(x))
+    adj = Variable(torch.FloatTensor(np.ones([features.shape[0], features.shape[1], features.shape[1]])))
+
+    model.eval()
+    output, attentions = model.forward2(features, adj)
+    output = output.view(-1, 2)
+    preds = output.max(1)[1].view(attentions.size(0), attentions.size(1)).data.numpy()
+    attentions = attentions.data.numpy()
+
+    # select attentions
+    idx_1 = (preds.sum(axis=-1) > 0)
+    attentions = attentions[idx_1, :, :, :]  # (66, 18, 18, 4)
+    attentions = np.mean(attentions, axis=0)  # (18, 18, 4)
+    attentions = np.concatenate([attentions, attentions.mean(axis=-1, keepdims=True)], axis=-1)
+
+    # draw attention graph
+    # TODO: need to draw every channels' graph, and a combined one
+    for i in range(5):  # 5 graphs
+        distance = to_symetric(attentions[:, :, i])
+        # # MDS
+        # mds = manifold.MDS(n_components=2, max_iter=3000, eps=1e-9, #random_state=seed,
+        #                    dissimilarity="precomputed", n_jobs=1)
+        # pos = mds.fit_transform(distance)
+        # attention_graph(pos, title='MDS, Attention Head {}'.format(i))
+        # t-sne
+        tsne = manifold.TSNE(n_components=2, perplexity=5,  # random_state=seed,
+                             metric="precomputed")
+        pos = tsne.fit_transform(distance)
+        attention_graph(pos, title='t-sne, Attention Head {}'.format(i))
+    return
+'''
 
 
 def to_symetric(mat):
@@ -113,12 +170,12 @@ def attention_graph(X, title=None):
     y = ['Fp1', 'Fp2', 'F3', 'F4', 'C3', 'C4', 'P3', 'P4', 'O1',
          'O2', 'F7', 'F8', 'T3', 'T4', 'T5', 'T6', 'Fz', 'Pz']
 
-    plt.figure()
+    plt.figure(figsize=(6.4, 4.8), dpi=250)
     ax = plt.subplot(111)
     for i in range(X.shape[0]):
         plt.text(X[i, 0], X[i, 1], str(y[i]),
                  color='red' if y[i] in ['T3', 'T5', 'F3', 'C3'] else 'blue',
-                 fontdict={'weight': 'bold', 'size': 9})
+                 fontdict={'weight': 'bold', 'size': 12})
 
     plt.xticks([]), plt.yticks([])
     if title is not None:
@@ -127,13 +184,15 @@ def attention_graph(X, title=None):
 
     return
 
-def compute_test(x_test, y_test):
+def compute_test(x_test, y_test, SpikeChans=False):
     features = Variable(torch.FloatTensor(x_test))
     adj = Variable(torch.FloatTensor(np.ones([features.shape[0], features.shape[1], features.shape[1]])))
     labels = Variable(torch.LongTensor(y_test))
 
     model.eval()
     output = model(features, adj)
+    if SpikeChans == True:
+        display_spike_chans(output, labels)
     output = output.view(-1, 2)
     labels = labels.view(-1)
     loss_test = F.nll_loss(output, labels)
@@ -148,6 +207,31 @@ def compute_test(x_test, y_test):
           )
     return tp/(tp+fn)
 
+def display_spike_chans(output, labels):
+    output = output.data.numpy()  # (batch, chans, 2)
+    labels = labels.data.numpy()  # (batch, chans)
+    preds = np.argmax(output, axis=-1)  # (batch, chans)
+    labels_sumspikes = np.sum(labels, axis=-1)
+    labels_sumspikes = labels_sumspikes[labels_sumspikes>0]  # (N,) how many chans have spikes every time
+    preds_sumspikes = np.sum(preds, axis=-1)
+    preds_sumspikes = preds_sumspikes[preds_sumspikes>0]  # (N_preds,)
+
+    import plotly.plotly as py
+    import plotly.graph_objs as go
+    trace1 = go.Histogram(
+        x=labels_sumspikes,
+        name = 'labels',
+        opacity=0.75
+    )
+    trace2 = go.Histogram(
+        x=preds_sumspikes,
+        name = 'preds',
+        opacity=0.75
+    )
+    data = [trace1, trace2]
+    layout = go.Layout(barmode='overlay')
+    fig = go.Figure(data=data, layout=layout)
+    py.iplot(fig, filename='overlaid histogram')
 
 def plot_chan_exp():
     GADN0 = np.array(
@@ -163,22 +247,27 @@ def plot_chan_exp():
         [0.6552338530066815, 0.6717339667458432, 0.6712962962962963, 0.6881047239612976, 0.6949152542372882,
          0.6942896935933147, 0.7073365231259968, 0.6994022203245089, 0.6712463199214916, 0.6768603465851172])
 
-    plt.figure()
+    plt.figure(figsize=(6.4, 4.8), dpi=250)
     plt.axes(xlabel='channel delete num', ylabel='sensitivity')
     plt.plot(GADN0,label='GADN')
     plt.plot(GADN_Conv0, label='GADN_OnlyConv')
     plt.title('Delete background channels')
     plt.xticks(range(10))
     plt.legend()
+    plt.grid(True, linestyle='--')
+    ax = plt.gca()
+    ax.spines['right'].set_color('none')
+    ax.spines['top'].set_color('none')
 
-    plt.figure()
-    plt.axes(xlabel='channel delete num', ylabel='sensitivity')
-    plt.plot(GADN1, label='GADN')
-    plt.plot(GADN_Conv1, label='GADN_OnlyConv')
-    plt.title('Delete spike channels')
-    plt.xticks(range(10))
-    plt.legend()
+    # plt.figure()
+    # plt.axes(xlabel='channel delete num', ylabel='sensitivity')
+    # plt.plot(GADN1, label='GADN')
+    # plt.plot(GADN_Conv1, label='GADN_OnlyConv')
+    # plt.title('Delete spike channels')
+    # plt.xticks(range(10))
+    # plt.legend()
     plt.show()
+    plt.savefig('chan_exp.eps', dpi=600, format='eps')
     return
 
 def svm_run_and_test(load=True):
@@ -264,14 +353,16 @@ if __name__ == '__main__':
     print('model loaded')
 
     # Testing
-    mode = 'GADN'  # define which test to run: GADN, svm, run_record, cut_channel_GADN, cut_channel_svm
+    mode = 'plot_chan_exp'  # define which test to run: GADN, svm, run_record, cut_channel_GADN, cut_channel_svm
     if mode == 'GADN':
-        compute_test(x_test, y_test)
+        compute_test(x_test, y_test, SpikeChans=True)
     elif mode == 'cut_channel_GADN':
         cut_chan_test(mode='GADN')
     elif mode == 'svm':
         clf = svm_run_and_test()
     elif mode == 'run_record':
         run_EEG_record(model)
-
-    plot_chan_exp()
+    elif mode == 'attents_box_chart':
+        attents_box(model)
+    elif mode == 'plot_chan_exp':
+        plot_chan_exp()
